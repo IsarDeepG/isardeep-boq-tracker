@@ -98,6 +98,19 @@
     border-radius: 10px; padding: 10px; background: #fff; resize: vertical; min-height: 72px;
     color: var(--ink); max-width: 100%;
   }
+  .openboard { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px 6px; margin: 4px 0 8px; }
+  .openboard h2 { font-size: 1.05rem; margin: 0; }
+  .openboard .lead { color: var(--muted); font-size: .82rem; margin: 4px 0 8px; }
+  .oroom { margin: 10px 0 12px; }
+  .oroom h3 { font-size: .92rem; margin: 0; display: flex; justify-content: space-between; gap: 8px; }
+  .oroom h3 button { min-height: 0; padding: 0; border: 0; background: none; font-weight: 700; color: inherit; cursor: pointer; text-align: left; }
+  .oline { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); font-size: .92rem; }
+  .oline button { min-height: 0; padding: 0; border: 0; background: none; text-align: left; font-weight: 600; cursor: pointer; }
+  .tag { flex: 0 0 auto; font-size: .75rem; border-radius: 999px; padding: 2px 8px; border: 1px solid var(--line); color: var(--muted); }
+  .tag.pending { color: #44403c; }
+  .tag.partial { color: var(--partial); border-color: #e6d3a4; }
+  .tag.unfinished { color: var(--unfinished); border-color: #f0c7b4; }
+  .tag.unset { color: #9f1239; border-color: #fecdd3; }
   .notes { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 18px; }
   .notes h2 { font-size: 1rem; margin: 0 0 8px; }
   .notes li { margin: 4px 0; }
@@ -143,6 +156,7 @@
 </header>
 <main>
   <div id="fatal" class="fatal" hidden></div>
+  <section id="open" class="openboard" hidden></section>
   <div id="list"></div>
   <section class="notes">
     <h2>BOQ notes</h2>
@@ -318,7 +332,46 @@ function seg(s, label, cur) {
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 }
+
+const OPEN_LABEL = { pending: "Pending", partial: "Partial", unfinished: "Unfinished", unset: "Not set" };
+function isOpen(it) {
+  const st = rec(it.id).status;
+  return st !== "done" && st !== "skip";
+}
+function renderOpen() {
+  const box = document.getElementById("open");
+  const rooms = [];
+  let last = "";
+  for (const it of ITEMS) {
+    if (it.room !== last) { rooms.push(it.room); last = it.room; }
+  }
+  let blocks = "";
+  let n = 0;
+  let roomsWith = 0;
+  for (const room of rooms) {
+    const open = ITEMS.filter(it => it.room === room && isOpen(it));
+    if (!open.length) continue;
+    roomsWith++;
+    n += open.length;
+    const lines = open.map(it => {
+      const st = rec(it.id).status || "unset";
+      const label = OPEN_LABEL[st] || "Not set";
+      const sp = splitCost(it);
+      const moneyBit = sp && sp.pending ? " · " + money(sp.pending) + " left" : "";
+      return `<div class="oline"><button type="button" data-jump="${it.id}">${escapeHtml(it.name)}</button><span class="tag ${st}">${label}${moneyBit}</span></div>`;
+    }).join("");
+    blocks += `<div class="oroom"><h3><button type="button" data-room-jump="${escapeHtml(room)}">${escapeHtml(room)}</button><span class="meta">${open.length} not done</span></h3>${lines}</div>`;
+  }
+  if (!n) {
+    box.hidden = false;
+    box.innerHTML = `<h2>Not done, by room</h2><p class="lead">Nothing left. Every item is done or skipped.</p>`;
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = `<h2>Not done, by room</h2><p class="lead">${n} items still open across ${roomsWith} rooms. Done and Skip are left out. Tap a line to jump to it.</p>${blocks}`;
+}
 function render() {
+  renderOpen();
   renderStats();
   const list = document.getElementById("list");
   const shown = ITEMS.filter(passes);
@@ -384,6 +437,28 @@ document.querySelectorAll("[data-filter]").forEach(b => b.addEventListener("clic
   document.querySelectorAll("[data-filter]").forEach(x => x.classList.toggle("on", x === b));
   render();
 }));
+document.getElementById("open").addEventListener("click", e => {
+  const line = e.target.closest("[data-jump]");
+  const roomBtn = e.target.closest("[data-room-jump]");
+  if (roomBtn) {
+    document.getElementById("room").value = roomBtn.dataset.roomJump;
+    filter = "all";
+    document.querySelectorAll("[data-filter]").forEach(x => x.classList.toggle("on", x.dataset.filter === "all"));
+    document.getElementById("q").value = "";
+    render();
+    document.getElementById("list").scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  if (!line) return;
+  const id = line.dataset.jump;
+  document.getElementById("room").value = "";
+  document.getElementById("q").value = "";
+  filter = "all";
+  document.querySelectorAll("[data-filter]").forEach(x => x.classList.toggle("on", x.dataset.filter === "all"));
+  render();
+  const art = document.querySelector('#list article[data-id="' + id + '"]');
+  if (art) art.scrollIntoView({ behavior: "smooth", block: "start" });
+});
 document.getElementById("reload").addEventListener("click", () => { if (!inflight) boot(); });
 
 async function boot() {
