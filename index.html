@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#f3efe6">
-<title>Isardeep BOQ · site tracker</title>
+<title>Isardeep BOQ · comments</title>
 <style>
   :root {
     --bg: #f3efe6;
@@ -90,6 +90,8 @@
   .seg button[data-s="unfinished"].on { background: var(--unfinished); border-color: var(--unfinished); color: #fff; }
   .seg button[data-s="pending"].on { background: #44403c; border-color: #44403c; color: #fff; }
   .seg button[data-s="skip"].on { background: var(--skip); border-color: var(--skip); color: #fff; }
+  .seg button[disabled] { pointer-events: none; cursor: default; }
+  .locked { flex: 1 1 100%; font-size: .78rem; color: var(--muted); letter-spacing: .01em; }
   label.field { display: block; margin-top: 10px; font-size: .82rem; color: var(--muted); }
   textarea {
     width: 100%; margin-top: 4px; font: inherit; font-size: 16px; border: 1px solid var(--line);
@@ -116,7 +118,7 @@
 <body>
 <header class="top">
   <h1>Isardeep · site tracker</h1>
-  <p class="sub">Shared with everyone who opens this page. Last write wins.</p>
+  <p class="sub">Statuses are locked on this page. You can only add a comment. Comments are shared. Last comment wins.</p>
   <div class="hero">
     <div class="onsite"><span>On site</span><b id="onSite">…</b></div>
     <div class="still"><span>Still pending</span><b id="still">…</b></div>
@@ -215,31 +217,46 @@ function docBody() {
     lines: state
   };
 }
+const dirtyComments = {};
 function kickSave() {
   if (!loaded) return;
   if (inflight) { queued = true; return; }
   inflight = true;
   queued = false;
-  setSync("saving", "Saving…");
-  const body = JSON.stringify(docBody());
-  fetch(SHARE_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body
-  }).then(async r => {
-    if (!r.ok) throw new Error("Save failed (HTTP " + r.status + ")");
-    const data = await r.json();
-    if (!data || typeof data.lines !== "object" || !data.lines) throw new Error("Save did not return the shared document");
-    inflight = false;
-    if (queued) { kickSave(); return; }
-    const t = new Date();
-    setSync("saved", "Saved " + t.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" }));
-    saveError = "";
-  }).catch(err => {
-    inflight = false;
-    saveError = err.message || "Save failed";
-    setSync("error", saveError + ". Tap a status again to retry.");
-  });
+  setSync("saving", "Saving comment…");
+  const pending = { ...dirtyComments };
+  fetch(SHARE_URL + "?t=" + Date.now(), { cache: "no-store" })
+    .then(async r => {
+      if (!r.ok) throw new Error("Could not refresh before save (HTTP " + r.status + ")");
+      const remote = await r.json();
+      if (!remote || typeof remote.lines !== "object" || !remote.lines) throw new Error("Shared document has no lines");
+      const lines = remote.lines;
+      for (const id of Object.keys(pending)) {
+        const cur = lines[id] && typeof lines[id] === "object" ? lines[id] : {};
+        lines[id] = { ...cur, status: cur.status || "", comment: pending[id] };
+      }
+      const body = JSON.stringify({ title: "Isardeep interior BOQ tracker", updatedAt: new Date().toISOString(), lines });
+      const w = await fetch(SHARE_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+      if (!w.ok) throw new Error("Save failed (HTTP " + w.status + ")");
+      const data = await w.json();
+      if (!data || typeof data.lines !== "object" || !data.lines) throw new Error("Save did not return the shared document");
+      for (const id of Object.keys(state)) {
+        const remoteLine = data.lines[id];
+        if (remoteLine && dirtyComments[id] == null) state[id].status = remoteLine.status || "";
+      }
+      for (const id of Object.keys(pending)) {
+        if (dirtyComments[id] === pending[id]) delete dirtyComments[id];
+      }
+      inflight = false;
+      if (queued || Object.keys(dirtyComments).length) { kickSave(); return; }
+      setSync("saved", "Comment saved " + new Date().toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" }));
+      saveError = "";
+    })
+    .catch(err => {
+      inflight = false;
+      saveError = err.message || "Save failed";
+      setSync("error", saveError + ". Edit the comment again to retry.");
+    });
 }
 function scheduleSave() {
   if (!loaded) return;
@@ -296,7 +313,7 @@ function qtyLine(it) {
   return bits.join(" · ");
 }
 function seg(s, label, cur) {
-  return `<button type="button" data-s="${s}" class="${cur===s?"on":""}">${label}</button>`;
+  return `<button type="button" data-s="${s}" class="${cur===s?"on":""}" disabled aria-disabled="true" tabindex="-1">${label}</button>`;
 }
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
@@ -335,6 +352,7 @@ function render() {
       <p class="details">${escapeHtml(it.details)}</p>
       ${it.remarks ? `<p class="remarks">${escapeHtml(it.remarks)}</p>` : ""}
       <div class="seg">
+        <span class="locked">Status locked</span>
         ${seg("pending","Pending", r.status)}
         ${seg("partial","Partial", r.status)}
         ${seg("unfinished","Unfinished", r.status)}
@@ -347,20 +365,13 @@ function render() {
   list.innerHTML = html;
 }
 
-document.getElementById("list").addEventListener("click", e => {
-  const btn = e.target.closest("button[data-s]");
-  if (!btn) return;
-  const art = e.target.closest("article");
-  if (!art || !loaded) return;
-  rec(art.dataset.id).status = btn.dataset.s;
-  render();
-  saveNow();
-});
 document.getElementById("list").addEventListener("input", e => {
   const ta = e.target.closest("textarea");
   if (!ta || !loaded) return;
   const art = e.target.closest("article");
+  if (!art) return;
   rec(art.dataset.id).comment = ta.value;
+  dirtyComments[art.dataset.id] = ta.value;
   scheduleSave();
 });
 const rooms = [...new Set(ITEMS.map(i => i.room))];
