@@ -140,7 +140,7 @@
 <div class="work">
 <header class="top">
   <h1>Isardeep · site tracker</h1>
-  <p class="sub">Statuses are locked on this page. You can only add a comment. Comments are shared. Last comment wins.</p>
+  <p class="sub">Comments are open. Changing a status asks for the password. Shared with everyone. Last write wins.</p>
   <div class="hero">
     <div class="onsite"><span>On site</span><b id="onSite">…</b></div>
     <div class="still"><span>Still pending</span><b id="still">…</b></div>
@@ -239,23 +239,44 @@ function docBody() {
     lines: state
   };
 }
+const PASSWORD = "M.E.A";
 const dirtyComments = {};
+const dirtyStatuses = {};
+function statusUnlocked() {
+  return sessionStorage.getItem("boq-status-ok") === "1";
+}
+function askStatusPassword() {
+  if (statusUnlocked()) return true;
+  const entered = window.prompt("Password to change status");
+  if (entered === null) return false;
+  if (entered !== PASSWORD) {
+    setSync("error", "Wrong password. Status was not changed.");
+    return false;
+  }
+  sessionStorage.setItem("boq-status-ok", "1");
+  return true;
+}
 function kickSave() {
   if (!loaded) return;
   if (inflight) { queued = true; return; }
   inflight = true;
   queued = false;
-  setSync("saving", "Saving comment…");
-  const pending = { ...dirtyComments };
+  setSync("saving", "Saving…");
+  const pendingComments = { ...dirtyComments };
+  const pendingStatuses = { ...dirtyStatuses };
   fetch(SHARE_URL + "?t=" + Date.now(), { cache: "no-store" })
     .then(async r => {
       if (!r.ok) throw new Error("Could not refresh before save (HTTP " + r.status + ")");
       const remote = await r.json();
       if (!remote || typeof remote.lines !== "object" || !remote.lines) throw new Error("Shared document has no lines");
       const lines = remote.lines;
-      for (const id of Object.keys(pending)) {
+      const ids = new Set([...Object.keys(pendingComments), ...Object.keys(pendingStatuses)]);
+      for (const id of ids) {
         const cur = lines[id] && typeof lines[id] === "object" ? lines[id] : {};
-        lines[id] = { ...cur, status: cur.status || "", comment: pending[id] };
+        const next = { status: cur.status || "", comment: cur.comment || "" };
+        if (Object.prototype.hasOwnProperty.call(pendingComments, id)) next.comment = pendingComments[id];
+        if (Object.prototype.hasOwnProperty.call(pendingStatuses, id)) next.status = pendingStatuses[id];
+        lines[id] = next;
       }
       const body = JSON.stringify({ title: "Isardeep interior BOQ tracker", updatedAt: new Date().toISOString(), lines });
       const w = await fetch(SHARE_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body });
@@ -264,20 +285,25 @@ function kickSave() {
       if (!data || typeof data.lines !== "object" || !data.lines) throw new Error("Save did not return the shared document");
       for (const id of Object.keys(state)) {
         const remoteLine = data.lines[id];
-        if (remoteLine && dirtyComments[id] == null) state[id].status = remoteLine.status || "";
+        if (!remoteLine) continue;
+        if (dirtyComments[id] == null) state[id].comment = remoteLine.comment || "";
+        if (dirtyStatuses[id] == null) state[id].status = remoteLine.status || "";
       }
-      for (const id of Object.keys(pending)) {
-        if (dirtyComments[id] === pending[id]) delete dirtyComments[id];
+      for (const id of Object.keys(pendingComments)) {
+        if (dirtyComments[id] === pendingComments[id]) delete dirtyComments[id];
+      }
+      for (const id of Object.keys(pendingStatuses)) {
+        if (dirtyStatuses[id] === pendingStatuses[id]) delete dirtyStatuses[id];
       }
       inflight = false;
-      if (queued || Object.keys(dirtyComments).length) { kickSave(); return; }
-      setSync("saved", "Comment saved " + new Date().toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" }));
+      if (queued || Object.keys(dirtyComments).length || Object.keys(dirtyStatuses).length) { kickSave(); return; }
+      setSync("saved", "Saved " + new Date().toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" }));
       saveError = "";
     })
     .catch(err => {
       inflight = false;
       saveError = err.message || "Save failed";
-      setSync("error", saveError + ". Edit the comment again to retry.");
+      setSync("error", saveError + ". Try again.");
     });
 }
 function scheduleSave() {
@@ -335,7 +361,7 @@ function qtyLine(it) {
   return bits.join(" · ");
 }
 function seg(s, label, cur) {
-  return `<button type="button" data-s="${s}" class="${cur===s?"on":""}" disabled aria-disabled="true" tabindex="-1">${label}</button>`;
+  return `<button type="button" data-s="${s}" class="${cur===s?"on":""}">${label}</button>`;
 }
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
@@ -413,7 +439,7 @@ function render() {
       <p class="details">${escapeHtml(it.details)}</p>
       ${it.remarks ? `<p class="remarks">${escapeHtml(it.remarks)}</p>` : ""}
       <div class="seg">
-        <span class="locked">Status locked</span>
+        <span class="locked">Password required to change status</span>
         ${seg("pending","Pending", r.status)}
         ${seg("partial","Partial", r.status)}
         ${seg("unfinished","Unfinished", r.status)}
@@ -426,6 +452,17 @@ function render() {
   list.innerHTML = html;
 }
 
+document.getElementById("list").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-s]");
+  if (!btn) return;
+  const art = e.target.closest("article");
+  if (!art || !loaded) return;
+  if (!askStatusPassword()) return;
+  rec(art.dataset.id).status = btn.dataset.s;
+  dirtyStatuses[art.dataset.id] = btn.dataset.s;
+  render();
+  saveNow();
+});
 document.getElementById("list").addEventListener("input", e => {
   const ta = e.target.closest("textarea");
   if (!ta || !loaded) return;

@@ -408,11 +408,27 @@ function render() {
   list.innerHTML = html;
 }
 
+const PASSWORD = "M.E.A";
+function statusUnlocked() {
+  return sessionStorage.getItem("boq-status-ok") === "1";
+}
+function askStatusPassword() {
+  if (statusUnlocked()) return true;
+  const entered = window.prompt("Password to change status");
+  if (entered === null) return false;
+  if (entered !== PASSWORD) {
+    setSync("error", "Wrong password. Status was not changed.");
+    return false;
+  }
+  sessionStorage.setItem("boq-status-ok", "1");
+  return true;
+}
 document.getElementById("list").addEventListener("click", e => {
   const btn = e.target.closest("button[data-s]");
   if (!btn) return;
   const art = e.target.closest("article");
   if (!art || !loaded) return;
+  if (!askStatusPassword()) return;
   rec(art.dataset.id).status = btn.dataset.s;
   render();
   saveNow();
