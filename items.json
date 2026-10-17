@@ -492,6 +492,18 @@
     "remarks": ""
   },
   {
+    "id": "126",
+    "room": "Kids bedroom",
+    "sn": "12",
+    "name": "Bay window unit",
+    "details": "Bay window unit.",
+    "qty": "",
+    "unit": "",
+    "rate": "",
+    "amount": null,
+    "remarks": "No amount. Status only."
+  },
+  {
     "id": "042",
     "room": "Master bedroom",
     "sn": "1",
