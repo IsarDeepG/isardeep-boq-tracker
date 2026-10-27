@@ -126,6 +126,23 @@
     .toprow { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
     input[type="search"] { flex: 1 1 220px; width: auto; }
   }
+
+  .versions {
+    position: fixed; z-index: 30; top: 12px; right: 12px; width: min(440px, calc(100vw - 24px));
+    max-height: calc(100vh - 24px); overflow: auto; background: var(--card);
+    border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px 18px;
+    box-shadow: 0 16px 40px rgba(40, 30, 20, .16);
+  }
+  .vhead { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .vhead h2 { margin: 0; font-size: 1.05rem; }
+  .vhead button, .vrow .acts button { min-height: 36px; padding: 6px 10px; }
+  .versions .lead { color: var(--muted); font-size: .82rem; margin: 8px 0 4px; }
+  .vrow { border-top: 1px solid var(--line); padding: 8px 0; }
+  .vrow .when { font-weight: 700; font-size: .92rem; }
+  .vrow .sum { color: var(--muted); font-size: .82rem; margin: 2px 0 6px; }
+  .vrow .acts { display: flex; gap: 8px; }
+  .vrow .diff { font-size: .82rem; margin-top: 8px; }
+  .vrow .diff p { margin: 0 0 8px; }
   @media (max-width: 860px) {
     .shell { grid-template-columns: 1fr; }
     .openboard { position: relative; height: auto; max-height: 48vh; border-right: 0; border-bottom: 1px solid var(--line); }
@@ -157,10 +174,17 @@
     <button type="button" data-filter="skip">Skip</button>
     <button type="button" data-filter="unset">Not set</button>
     <button type="button" id="reload">Reload</button>
+    <button type="button" id="versionsBtn">Versions</button>
     <button type="button" id="downloadPdf">Download PDF</button>
     <span class="sync" id="sync" role="status">Loading shared tracker…</span>
   </div>
 </header>
+<section id="versions" class="versions" hidden>
+  <div class="vhead"><h2>Versions</h2><button type="button" id="versionsClose">Close</button></div>
+  <p class="lead">A version is saved when someone changes a status or a comment. Compare shows how that copy differs from now. Restore puts that copy back.</p>
+  <div id="versionList"></div>
+</section>
+
 <main>
   <div id="fatal" class="fatal" hidden></div>
   <div id="list"></div>
@@ -237,31 +261,174 @@ function docBody() {
     lines: state
   };
 }
+
+let versions = [];
+let fullReplace = false;
+const VERSION_CAP = 20;
+function packLines(lines) {
+  const out = {};
+  for (const id of Object.keys(lines || {})) {
+    const row = lines[id] && typeof lines[id] === "object" ? lines[id] : {};
+    const status = row.status || "";
+    const comment = row.comment || "";
+    if (status || comment) out[id] = { status, comment };
+  }
+  return out;
+}
+function itemLabel(id) {
+  const it = ITEMS.find(x => x.id === id);
+  return it ? it.room + " · " + it.name : id;
+}
+function statusWord(s) {
+  return ({ "": "Not set", pending: "Pending", partial: "Partial", unfinished: "Unfinished", done: "Done", skip: "Skip" })[s] || s || "Not set";
+}
+function diffPacked(a, b) {
+  const ids = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+  const changes = [];
+  for (const id of ids) {
+    const as = (a[id] && a[id].status) || "";
+    const bs = (b[id] && b[id].status) || "";
+    const ac = (a[id] && a[id].comment) || "";
+    const bc = (b[id] && b[id].comment) || "";
+    if (as !== bs) changes.push({ id, kind: "status", from: as, to: bs });
+    if (ac !== bc) changes.push({ id, kind: "comment", from: ac, to: bc });
+  }
+  changes.sort((x, y) => itemLabel(x.id).localeCompare(itemLabel(y.id)) || x.kind.localeCompare(y.kind));
+  return changes;
+}
+function summaryOf(changes) {
+  if (!changes.length) return "No changes";
+  const bits = changes.slice(0, 3).map(c => {
+    const name = itemLabel(c.id);
+    if (c.kind === "status") return name + ": " + statusWord(c.from) + " → " + statusWord(c.to);
+    const text = (c.to || "").replace(/\s+/g, " ").trim();
+    return name + ": comment" + (text ? " \u201c" + text.slice(0, 40) + (text.length > 40 ? "\u2026" : "") + "\u201d" : " cleared");
+  });
+  return bits.join("; ") + (changes.length > 3 ? " +" + (changes.length - 3) + " more" : "");
+}
+function versionWhen(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+}
+function nextVersions(remote, before, after) {
+  let list = Array.isArray(remote && remote.versions) ? remote.versions.filter(v => v && v.lines && typeof v.lines === "object") : [];
+  const changes = diffPacked(before, after);
+  if (!changes.length) return list.slice(0, VERSION_CAP);
+  const now = new Date().toISOString();
+  const commentOnly = changes.every(c => c.kind === "comment");
+  const entry = {
+    id: "v" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    at: now,
+    summary: summaryOf(changes),
+    commentOnly,
+    lines: after
+  };
+  if (!list.length) {
+    list = [entry, { id: "vseed", at: (remote && remote.updatedAt) || now, summary: "State before version history", commentOnly: false, lines: before }];
+  } else {
+    const newest = list[0];
+    const recent = commentOnly && newest && newest.commentOnly && (Date.now() - Date.parse(newest.at) < 3 * 60 * 1000);
+    list = recent ? [entry, ...list.slice(1)] : [entry, ...list];
+  }
+  return list.slice(0, VERSION_CAP);
+}
+function renderVersions() {
+  const box = document.getElementById("versionList");
+  if (!box) return;
+  if (!versions.length) {
+    box.innerHTML = '<p class="lead">No saved versions yet. The next change is kept here.</p>';
+    return;
+  }
+  box.innerHTML = versions.map((v, i) => `<div class="vrow" data-vid="${escapeHtml(v.id)}">
+      <div class="when">${i === 0 ? "Latest · " : ""}${escapeHtml(versionWhen(v.at))}</div>
+      <div class="sum">${escapeHtml(v.summary || "Saved")}</div>
+      <div class="acts">
+        <button type="button" data-compare="${escapeHtml(v.id)}">Compare</button>
+        <button type="button" data-restore="${escapeHtml(v.id)}">Restore</button>
+      </div>
+      <div class="diff" hidden></div>
+    </div>`).join("");
+}
+function compareVersion(id) {
+  const v = versions.find(x => x.id === id);
+  const row = document.querySelector('.vrow[data-vid="' + id + '"] .diff');
+  if (!v || !row) return;
+  if (!row.hidden && row.dataset.on === "1") { row.hidden = true; row.dataset.on = ""; return; }
+  document.querySelectorAll(".vrow .diff").forEach(el => { el.hidden = true; el.dataset.on = ""; });
+  const changes = diffPacked(v.lines, packLines(state));
+  row.innerHTML = changes.length ? changes.map(c => {
+    if (c.kind === "status") return `<p><b>${escapeHtml(itemLabel(c.id))}</b><br>In this version: ${escapeHtml(statusWord(c.from))}<br>Now: ${escapeHtml(statusWord(c.to))}</p>`;
+    return `<p><b>${escapeHtml(itemLabel(c.id))}</b><br>Comment then: ${escapeHtml(c.from || "\u2014")}<br>Now: ${escapeHtml(c.to || "\u2014")}</p>`;
+  }).join("") : "<p>Same as what is on screen now.</p>";
+  row.hidden = false;
+  row.dataset.on = "1";
+}
+function restoreVersion(id) {
+  const v = versions.find(x => x.id === id);
+  if (!v) return;
+  if (!askStatusPassword()) return;
+  if (!window.confirm("Restore the version from " + (versionWhen(v.at) || "that time") + "? Statuses and comments will be replaced. You can restore another version after.")) return;
+  const next = {};
+  for (const it of ITEMS) {
+    const row = v.lines[it.id] || {};
+    next[it.id] = { status: row.status || "", comment: row.comment || "" };
+  }
+  state = next;
+  if (typeof dirtyComments !== "undefined") { for (const k of Object.keys(dirtyComments)) delete dirtyComments[k]; }
+  if (typeof dirtyStatuses !== "undefined") { for (const k of Object.keys(dirtyStatuses)) delete dirtyStatuses[k]; }
+  fullReplace = true;
+  render();
+  saveNow();
+}
+async function postShared(payload) {
+  let vers = payload.versions || [];
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const body = JSON.stringify({ title: "Isardeep interior BOQ tracker", updatedAt: new Date().toISOString(), lines: payload.lines, versions: vers });
+    const w = await fetch(SHARE_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    lastStatus = w.status;
+    if (w.ok) return w.json();
+    if ((w.status === 413 || w.status === 400 || w.status === 422) && vers.length > 4) {
+      vers = vers.slice(0, Math.max(4, Math.floor(vers.length / 2)));
+      continue;
+    }
+    throw new Error("Save failed (HTTP " + w.status + ")");
+  }
+  throw new Error("Save failed (HTTP " + lastStatus + ")");
+}
 function kickSave() {
   if (!loaded) return;
   if (inflight) { queued = true; return; }
   inflight = true;
   queued = false;
   setSync("saving", "Saving…");
-  const body = JSON.stringify(docBody());
-  fetch(SHARE_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body
-  }).then(async r => {
-    if (!r.ok) throw new Error("Save failed (HTTP " + r.status + ")");
-    const data = await r.json();
-    if (!data || typeof data.lines !== "object" || !data.lines) throw new Error("Save did not return the shared document");
-    inflight = false;
-    if (queued) { kickSave(); return; }
-    const t = new Date();
-    setSync("saved", "Saved " + t.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" }));
-    saveError = "";
-  }).catch(err => {
-    inflight = false;
-    saveError = err.message || "Save failed";
-    setSync("error", saveError + ". Tap a status again to retry.");
-  });
+  const localLines = {};
+  for (const it of ITEMS) {
+    const row = state[it.id] || {};
+    localLines[it.id] = { status: row.status || "", comment: row.comment || "" };
+  }
+  fetch(SHARE_URL + "?t=" + Date.now(), { cache: "no-store" })
+    .then(async r => {
+      if (!r.ok) throw new Error("Could not refresh before save (HTTP " + r.status + ")");
+      const remote = await r.json();
+      if (!remote || typeof remote.lines !== "object" || !remote.lines) throw new Error("Shared document has no lines");
+      const versionsOut = nextVersions(remote, packLines(remote.lines), packLines(localLines));
+      const data = await postShared({ lines: localLines, versions: versionsOut });
+      if (!data || typeof data.lines !== "object" || !data.lines) throw new Error("Save did not return the shared document");
+      versions = Array.isArray(data.versions) ? data.versions : versionsOut;
+      fullReplace = false;
+      renderVersions();
+      inflight = false;
+      if (queued) { kickSave(); return; }
+      setSync("saved", "Saved " + new Date().toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" }));
+      saveError = "";
+    })
+    .catch(err => {
+      inflight = false;
+      saveError = err.message || "Save failed";
+      setSync("error", saveError + ". Try again.");
+    });
 }
 function scheduleSave() {
   if (!loaded) return;
@@ -476,6 +643,18 @@ document.getElementById("open").addEventListener("click", e => {
   const art = document.querySelector('#list article[data-id="' + id + '"]');
   if (art) art.scrollIntoView({ behavior: "smooth", block: "start" });
 });
+document.getElementById("versionsBtn").addEventListener("click", () => {
+  const panel = document.getElementById("versions");
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) renderVersions();
+});
+document.getElementById("versionsClose").addEventListener("click", () => { document.getElementById("versions").hidden = true; });
+document.getElementById("versionList").addEventListener("click", ev => {
+  const c = ev.target.closest("[data-compare]");
+  const r = ev.target.closest("[data-restore]");
+  if (c) compareVersion(c.dataset.compare);
+  if (r) restoreVersion(r.dataset.restore);
+});
 document.getElementById("reload").addEventListener("click", () => { if (!inflight) boot(); });
 
 async function boot() {
@@ -491,8 +670,10 @@ async function boot() {
       throw new Error("Shared document has no lines");
     }
     state = data.lines;
+    versions = Array.isArray(data.versions) ? data.versions : [];
     loaded = true;
     render();
+    renderVersions();
     setSync("saved", "Loaded shared tracker");
   } catch (err) {
     loaded = false;
