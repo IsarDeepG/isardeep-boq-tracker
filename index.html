@@ -43,6 +43,9 @@
   .hero b { display: block; font-size: 1.05rem; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
   .hero .onsite b { color: var(--done); }
   .hero .still b { color: #8a3b12; }
+  .hero .still { cursor: pointer; }
+  .hero .still.on { outline: 2px solid #8a3b12; outline-offset: 0; }
+  .hero small { display: block; margin-top: 4px; color: var(--muted); font-size: .72rem; line-height: 1.35; font-weight: 500; }
   .bar-wrap { margin-top: 8px; height: 8px; background: #e7e0d4; border-radius: 99px; overflow: hidden; }
   .bar-wrap span { display: block; height: 100%; background: var(--done); }
   .rules { color: var(--muted); font-size: .78rem; margin: 8px 0 0; }
@@ -160,7 +163,7 @@
   <p class="sub">Status changes are open until 12:44 PM. After that, the password is required again. Comments stay open.</p>
   <div class="hero">
     <div class="onsite"><span>On site</span><b id="onSite">…</b></div>
-    <div class="still"><span>Still pending</span><b id="still">…</b></div>
+    <div class="still" id="stillBox" role="button" tabindex="0" title="Show partial, pending and unfinished"><span>Still pending</span><b id="still">…</b><small id="stillBreak"></small></div>
   </div>
   <div class="bar-wrap" id="bar" aria-hidden="true"><span id="barDone" style="width:0"></span></div>
   <p class="rules">Amounts after 15% discount. GST 18% not included. Done = 100% on site. Partial = 50% on site / 50% pending. Unfinished = 80% on site / 20% pending. Pending = 100% pending. Skip = out of totals. Louvers use agreed ₹11,603 after discount (65 × ₹210 MRP).</p>
@@ -502,11 +505,12 @@ function passes(it) {
     if (!hay.includes(q)) return false;
   }
   if (filter === "unset") return !r.status;
+  if (filter === "left") return r.status === "pending" || r.status === "partial" || r.status === "unfinished";
   if (filter !== "all" && r.status !== filter) return false;
   return true;
 }
 function renderStats() {
-  let onSite = 0, still = 0;
+  let onSite = 0, still = 0, pendLeft = 0, partLeft = 0, unfLeft = 0;
   const counts = { done: 0, partial: 0, unfinished: 0, pending: 0, skip: 0, unset: 0 };
   for (const it of ITEMS) {
     const st = rec(it.id).status || "unset";
@@ -515,9 +519,16 @@ function renderStats() {
     if (!sp) continue;
     onSite += sp.onSite;
     still += sp.pending;
+    if (st === "pending") pendLeft += sp.pending;
+    if (st === "partial") partLeft += sp.pending;
+    if (st === "unfinished") unfLeft += sp.pending;
   }
   document.getElementById("onSite").textContent = money(onSite);
   document.getElementById("still").textContent = money(still);
+  const stillBox = document.getElementById("stillBox");
+  if (stillBox) stillBox.classList.toggle("on", filter === "left");
+  const stillBreak = document.getElementById("stillBreak");
+  if (stillBreak) stillBreak.textContent = "Pending " + money(pendLeft) + " + partial left " + money(partLeft) + " + unfinished left " + money(unfLeft);
   const denom = onSite + still;
   document.getElementById("barDone").style.width = (denom ? (onSite / denom * 100) : 0) + "%";
   document.getElementById("stats").innerHTML =
@@ -652,6 +663,12 @@ const roomSel = document.getElementById("room");
 roomSel.innerHTML = `<option value="">All rooms</option>` + rooms.map(r => `<option>${escapeHtml(r)}</option>`).join("");
 roomSel.addEventListener("change", render);
 document.getElementById("q").addEventListener("input", render);
+document.getElementById("stillBox").addEventListener("click", () => {
+  filter = filter === "left" ? "all" : "left";
+  document.querySelectorAll("[data-filter]").forEach(x => x.classList.toggle("on", filter !== "left" && x.dataset.filter === filter));
+  render();
+  if (filter === "left") document.getElementById("list").scrollIntoView({ behavior: "smooth", block: "start" });
+});
 document.querySelectorAll("[data-filter]").forEach(b => b.addEventListener("click", () => {
   filter = b.dataset.filter;
   document.querySelectorAll("[data-filter]").forEach(x => x.classList.toggle("on", x === b));
