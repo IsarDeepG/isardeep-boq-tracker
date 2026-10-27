@@ -140,7 +140,7 @@
 <div class="work">
 <header class="top">
   <h1>Isardeep · site tracker</h1>
-  <p class="sub">Comments are open. Changing a status asks for the password. Shared with everyone. Last write wins.</p>
+  <p class="sub">Status changes are open until 12:44 PM. After that, the password is required again. Comments stay open.</p>
   <div class="hero">
     <div class="onsite"><span>On site</span><b id="onSite">…</b></div>
     <div class="still"><span>Still pending</span><b id="still">…</b></div>
@@ -245,8 +245,12 @@ const dirtyStatuses = {};
 function statusUnlocked() {
   return sessionStorage.getItem("boq-status-ok") === "1";
 }
+const STATUS_OPEN_UNTIL = Date.parse("2026-10-27T12:44:00+05:30");
+function statusOpenNow() {
+  return Date.now() < STATUS_OPEN_UNTIL;
+}
 function askStatusPassword() {
-  if (statusUnlocked()) return true;
+  if (statusOpenNow() || statusUnlocked()) return true;
   const entered = window.prompt("Password to change status");
   if (entered === null) return false;
   if (entered !== PASSWORD) {
@@ -439,7 +443,7 @@ function render() {
       <p class="details">${escapeHtml(it.details)}</p>
       ${it.remarks ? `<p class="remarks">${escapeHtml(it.remarks)}</p>` : ""}
       <div class="seg">
-        <span class="locked">Password required to change status</span>
+        <span class="locked">${statusOpenNow() ? "Status open until 12:44 PM" : "Password required to change status"}</span>
         ${seg("pending","Pending", r.status)}
         ${seg("partial","Partial", r.status)}
         ${seg("unfinished","Unfinished", r.status)}
