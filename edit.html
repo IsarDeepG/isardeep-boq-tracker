@@ -752,6 +752,22 @@ function downloadPdf() {
   const skipped = [];
   const body = [];
   let lastRoom = "";
+  let roomBoq = 0, roomOn = 0, roomPend = 0;
+  const subtotalCell = (text, right) => ({
+    content: text,
+    styles: { fontStyle: "bold", fillColor: [232, 224, 210], textColor: [28, 25, 21], halign: right ? "right" : "left" }
+  });
+  function pushRoomSubtotal() {
+    if (!lastRoom) return;
+    body.push([
+      subtotalCell(lastRoom + " subtotal", false),
+      subtotalCell(inrPdf(roomBoq), true),
+      subtotalCell("", false),
+      subtotalCell(inrPdf(roomOn), true),
+      subtotalCell(inrPdf(roomPend), true),
+      subtotalCell("", false)
+    ]);
+  }
   for (const it of ITEMS) {
     const st = rec(it.id).status || "";
     if (st === "skip") { skipped.push(it); continue; }
@@ -760,9 +776,13 @@ function downloadPdf() {
     if (sp && it.id === "001") { louversOn = sp.onSite; louversPend = sp.pending; }
     else if (sp) { printedOn += sp.onSite; printedPend += sp.pending; }
     if (it.room !== lastRoom) {
+      pushRoomSubtotal();
+      roomBoq = 0; roomOn = 0; roomPend = 0;
       lastRoom = it.room;
       body.push([{ content: it.room, colSpan: 6, styles: { fontStyle: "bold", fillColor: [243, 239, 230], textColor: [28, 25, 21] } }]);
     }
+    if (a != null) roomBoq += a;
+    if (sp) { roomOn += sp.onSite; roomPend += sp.pending; }
     const comment = rec(it.id).comment || "";
     body.push([
       it.id + "  " + it.name,
@@ -773,6 +793,7 @@ function downloadPdf() {
       comment
     ]);
   }
+  pushRoomSubtotal();
   body.push([{ content: "Skipped (not in the two totals)", colSpan: 6, styles: { fontStyle: "bold", fillColor: [255, 253, 248], textColor: [28, 25, 21], fontSize: 10 } }]);
   body.push([{ content: "These lines are marked skip and are excluded from on site and still pending.", colSpan: 6, styles: { fontStyle: "normal", textColor: [70, 64, 56], fillColor: [255, 255, 255] } }]);
   if (!skipped.length) {
